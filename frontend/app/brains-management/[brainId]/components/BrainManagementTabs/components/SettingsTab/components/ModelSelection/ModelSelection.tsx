@@ -1,45 +1,26 @@
 import { UUID } from "crypto";
-import { UseFormRegister } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
-import Field from "@/lib/components/ui/Field";
 import { defineMaxTokens } from "@/lib/helpers/defineMaxTokens";
-import { BrainConfig } from "@/lib/types/brainConfig";
 import { SaveButton } from "@/shared/SaveButton";
+
+import { useBrainFormState } from "../../hooks/useBrainFormState";
 
 type ModelSelectionProps = {
   brainId: UUID;
-  temperature: number;
-  maxTokens: number;
-  model: "gpt-3.5-turbo" | "gpt-3.5-turbo-16k";
   handleSubmit: (checkDirty: boolean) => Promise<void>;
-  register: UseFormRegister<BrainConfig>;
   hasEditRights: boolean;
   accessibleModels: string[];
 };
 
 export const ModelSelection = (props: ModelSelectionProps): JSX.Element => {
+  const { model, maxTokens, register } = useBrainFormState();
   const { t } = useTranslation(["translation", "brain", "config"]);
-  const {
-    handleSubmit,
-    register,
-    temperature,
-    maxTokens,
-    model,
-    hasEditRights,
-    accessibleModels,
-  } = props;
+  const { handleSubmit, hasEditRights, accessibleModels } = props;
 
   return (
     <>
-      <Field
-        label={t("openAiKeyLabel", { ns: "config" })}
-        placeholder={t("openAiKeyPlaceholder", { ns: "config" })}
-        autoComplete="off"
-        className="flex-1"
-        disabled={!hasEditRights}
-        {...register("openAiKey")}
-      />
+      
       <fieldset className="w-full flex flex-col mt-2">
         <label className="flex-1 text-sm" htmlFor="model">
           {t("modelLabel", { ns: "config" })}
@@ -47,11 +28,12 @@ export const ModelSelection = (props: ModelSelectionProps): JSX.Element => {
         <select
           id="model"
           disabled={!hasEditRights}
-          {...register("model")}
+          {...register("model", {
+            onChange: () => {
+              void handleSubmit(false);
+            },
+          })}
           className="px-5 py-2 dark:bg-gray-700 bg-gray-200 rounded-md"
-          onChange={() => {
-            void handleSubmit(false); // Trigger form submission
-          }}
         >
           {accessibleModels.map((availableModel) => (
             <option value={availableModel} key={availableModel}>
@@ -59,21 +41,6 @@ export const ModelSelection = (props: ModelSelectionProps): JSX.Element => {
             </option>
           ))}
         </select>
-      </fieldset>
-      <fieldset className="w-full flex mt-4">
-        <label className="flex-1" htmlFor="temp">
-          {t("temperature", { ns: "config" })}: {temperature}
-        </label>
-        <input
-          id="temp"
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={temperature}
-          disabled={!hasEditRights}
-          {...register("temperature")}
-        />
       </fieldset>
       <fieldset className="w-full flex mt-4">
         <label className="flex-1" htmlFor="tokens">

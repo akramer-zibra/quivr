@@ -1,26 +1,24 @@
-/* eslint max-lines:["error", 110] */
-import { UseFormRegister } from "react-hook-form";
+/* eslint max-lines:["error", 150] */
+
 import { useTranslation } from "react-i18next";
 
+import { ApiRequestDefinition } from "@/lib/components/ApiRequestDefinition";
 import Button from "@/lib/components/ui/Button";
 import { Chip } from "@/lib/components/ui/Chip";
 import Field from "@/lib/components/ui/Field";
 import { Radio } from "@/lib/components/ui/Radio";
 import { TextArea } from "@/lib/components/ui/TextArea";
-import { BrainConfig } from "@/lib/types/brainConfig";
+
+import { useGeneralInformation } from "./hooks/useGeneralInformation";
+import { useBrainFormState } from "../../hooks/useBrainFormState";
 
 type GeneralInformationProps = {
-  register: UseFormRegister<BrainConfig>;
   hasEditRights: boolean;
   isPublicBrain: boolean;
   isOwnedByCurrentUser: boolean;
   isDefaultBrain: boolean;
   isSettingAsDefault: boolean;
   setAsDefaultBrainHandler: () => Promise<void>;
-  brainStatusOptions: {
-    label: string;
-    value: "private" | "public";
-  }[];
 };
 
 export const GeneralInformation = (
@@ -28,15 +26,16 @@ export const GeneralInformation = (
 ): JSX.Element => {
   const { t } = useTranslation(["translation", "brain", "config"]);
   const {
-    register,
     hasEditRights,
     isPublicBrain,
     isOwnedByCurrentUser,
     isDefaultBrain,
     isSettingAsDefault,
     setAsDefaultBrainHandler,
-    brainStatusOptions,
   } = props;
+  const { register } = useBrainFormState();
+
+  const { brainStatusOptions, brainTypeOptions } = useGeneralInformation();
 
   return (
     <>
@@ -86,12 +85,22 @@ export const GeneralInformation = (
           <Radio
             items={brainStatusOptions}
             label={t("brain_status_label", { ns: "brain" })}
-            value={status}
             className="flex-1 justify-between w-[50%]"
             {...register("status")}
           />
         </div>
       )}
+
+      <div className="w-full mt-4">
+        <Radio
+          items={brainTypeOptions}
+          label={t("knowledge_source_label", { ns: "brain" })}
+          className="flex-1 justify-between w-[50%]"
+          disabled={true}
+          {...register("brain_type")}
+        />
+      </div>
+      <ApiRequestDefinition />
       <TextArea
         label={t("brainDescription", { ns: "brain" })}
         placeholder={t("brainDescriptionPlaceholder", { ns: "brain" })}

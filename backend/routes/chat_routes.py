@@ -2,21 +2,16 @@ from typing import List, Optional
 from uuid import UUID
 from venv import logger
 
-from auth import AuthBearer, get_current_user
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from llm.qa_base import QABaseBrainPicking
 from llm.qa_headless import HeadlessQA
-from models import (
-    Brain,
-    BrainEntity,
-    Chat,
-    ChatQuestion,
-    UserIdentity,
-    UserUsage,
-    get_supabase_db,
-)
+from middlewares.auth import AuthBearer, get_current_user
+from models import Chat, ChatQuestion, UserUsage, get_supabase_db
 from models.databases.supabase.chats import QuestionAndAnswer
+from modules.notification.service.notification_service import NotificationService
+from modules.user.entity.user_identity import UserIdentity
+from repository.brain.get_brain_by_id import get_brain_by_id
 from repository.chat import (
     ChatUpdatableProperties,
     CreateChatProperties,
@@ -31,7 +26,6 @@ from repository.chat.get_chat_history_with_notifications import (
     ChatItem,
     get_chat_history_with_notifications,
 )
-from repository.notification.remove_chat_notifications import remove_chat_notifications
 from routes.chat.factory import get_chat_strategy
 from routes.chat.utils import (
     NullableUUID,
@@ -40,6 +34,8 @@ from routes.chat.utils import (
 )
 
 chat_router = APIRouter()
+
+notification_service = NotificationService()
 
 
 @chat_router.get("/chat/healthz", tags=["Health"])
@@ -72,7 +68,7 @@ async def delete_chat(chat_id: UUID):
     Delete a specific chat by chat ID.
     """
     supabase_db = get_supabase_db()
-    remove_chat_notifications(chat_id)
+    notification_service.remove_chat_notifications(chat_id)
 
     delete_chat_from_db(supabase_db=supabase_db, chat_id=chat_id)
     return {"message": f"{chat_id}  has been deleted."}
@@ -140,48 +136,46 @@ async def create_question_handler(
 
     chat_instance.validate_authorization(user_id=current_user.id, brain_id=brain_id)
 
-    current_user.openai_api_key = request.headers.get("Openai-Api-Key")
-    brain = Brain(id=brain_id)
-    brain_details: BrainEntity | None = None
+    fallback_model = "gpt-3.5-turbo"
+    fallback_temperature = 0.1
+    fallback_max_tokens = 512
 
-    userDailyUsage = UserUsage(
+    user_daily_usage = UserUsage(
         id=current_user.id,
         email=current_user.email,
-        openai_api_key=current_user.openai_api_key,
     )
-    userSettings = userDailyUsage.get_user_settings()
-    is_model_ok = (brain_details or chat_question).model in userSettings.get("models", ["gpt-3.5-turbo"])  # type: ignore
+    user_settings = user_daily_usage.get_user_settings()
+    is_model_ok = (chat_question).model in user_settings.get("models", ["gpt-3.5-turbo"])  # type: ignore
 
-    if not current_user.openai_api_key:
-        current_user.openai_api_key = chat_instance.get_openai_api_key(
-            brain_id=brain_id, user_id=current_user.id
-        )
     # Retrieve chat model (temperature, max_tokens, model)
     if (
         not chat_question.model
         or not chat_question.temperature
         or not chat_question.max_tokens
     ):
-        # TODO: create ChatConfig class (pick config from brain or user or chat) and use it here
-        chat_question.model = chat_question.model or brain.model or "gpt-3.5-turbo"
-        chat_question.temperature = (
-            chat_question.temperature or brain.temperature or 0.1
-        )
-        chat_question.max_tokens = chat_question.max_tokens or brain.max_tokens or 512
+        if brain_id:
+            brain = get_brain_by_id(brain_id)
+            if brain:
+                fallback_model = brain.model or fallback_model
+                fallback_temperature = brain.temperature or fallback_temperature
+                fallback_max_tokens = brain.max_tokens or fallback_max_tokens
+
+        chat_question.model = chat_question.model or fallback_model
+        chat_question.temperature = chat_question.temperature or fallback_temperature
+        chat_question.max_tokens = chat_question.max_tokens or fallback_max_tokens
 
     try:
         check_user_requests_limit(current_user)
-        is_model_ok = (brain_details or chat_question).model in userSettings.get("models", ["gpt-3.5-turbo"])  # type: ignore
-        gpt_answer_generator: HeadlessQA | QABaseBrainPicking
+        is_model_ok = (chat_question).model in user_settings.get("models", ["gpt-3.5-turbo"])  # type: ignore
         gpt_answer_generator = chat_instance.get_answer_generator(
             chat_id=str(chat_id),
             model=chat_question.model if is_model_ok else "gpt-3.5-turbo",  # type: ignore
             max_tokens=chat_question.max_tokens,
             temperature=chat_question.temperature,
             brain_id=str(brain_id),
-            user_openai_api_key=current_user.openai_api_key,  # pyright: ignore reportPrivateUsage=none
             streaming=False,
             prompt_id=chat_question.prompt_id,
+            user_id=current_user.id,
         )
 
         chat_answer = gpt_answer_generator.generate_answer(chat_id, chat_question)
@@ -213,22 +207,12 @@ async def create_stream_question_handler(
     chat_instance = get_chat_strategy(brain_id)
     chat_instance.validate_authorization(user_id=current_user.id, brain_id=brain_id)
 
-    # Retrieve user's OpenAI API key
-    current_user.openai_api_key = request.headers.get("Openai-Api-Key")
-    brain = Brain(id=brain_id)
-    brain_details: BrainEntity | None = None
-    userDailyUsage = UserUsage(
+    user_daily_usage = UserUsage(
         id=current_user.id,
         email=current_user.email,
-        openai_api_key=current_user.openai_api_key,
     )
 
-    userSettings = userDailyUsage.get_user_settings()
-
-    if not current_user.openai_api_key:
-        current_user.openai_api_key = chat_instance.get_openai_api_key(
-            brain_id=brain_id, user_id=current_user.id
-        )
+    user_settings = user_daily_usage.get_user_settings()
 
     # Retrieve chat model (temperature, max_tokens, model)
     if (
@@ -236,10 +220,20 @@ async def create_stream_question_handler(
         or chat_question.temperature is None
         or not chat_question.max_tokens
     ):
-        # TODO: create ChatConfig class (pick config from brain or user or chat) and use it here
-        chat_question.model = chat_question.model or brain.model or "gpt-3.5-turbo"
-        chat_question.temperature = chat_question.temperature or brain.temperature or 0
-        chat_question.max_tokens = chat_question.max_tokens or brain.max_tokens or 256
+        fallback_model = "gpt-3.5-turbo"
+        fallback_temperature = 0
+        fallback_max_tokens = 256
+
+        if brain_id:
+            brain = get_brain_by_id(brain_id)
+            if brain:
+                fallback_model = brain.model or fallback_model
+                fallback_temperature = brain.temperature or fallback_temperature
+                fallback_max_tokens = brain.max_tokens or fallback_max_tokens
+
+        chat_question.model = chat_question.model or fallback_model
+        chat_question.temperature = chat_question.temperature or fallback_temperature
+        chat_question.max_tokens = chat_question.max_tokens or fallback_max_tokens
 
     try:
         logger.info(f"Streaming request for {chat_question.model}")
@@ -247,17 +241,16 @@ async def create_stream_question_handler(
         gpt_answer_generator: HeadlessQA | QABaseBrainPicking
         # TODO check if model is in the list of models available for the user
 
-        is_model_ok = (brain_details or chat_question).model in userSettings.get("models", ["gpt-3.5-turbo"])  # type: ignore
-
+        is_model_ok = chat_question.model in user_settings.get("models", ["gpt-3.5-turbo"])  # type: ignore
         gpt_answer_generator = chat_instance.get_answer_generator(
             chat_id=str(chat_id),
-            model=(brain_details or chat_question).model if is_model_ok else "gpt-3.5-turbo",  # type: ignore
-            max_tokens=(brain_details or chat_question).max_tokens,  # type: ignore
-            temperature=(brain_details or chat_question).temperature,  # type: ignore
-            user_openai_api_key=current_user.openai_api_key,  # pyright: ignore reportPrivateUsage=none
+            model=chat_question.model if is_model_ok else "gpt-3.5-turbo",  # type: ignore
+            max_tokens=chat_question.max_tokens,
+            temperature=chat_question.temperature,  # type: ignore
             streaming=True,
             prompt_id=chat_question.prompt_id,
             brain_id=str(brain_id),
+            user_id=current_user.id,
         )
 
         return StreamingResponse(

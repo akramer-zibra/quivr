@@ -126,6 +126,14 @@ CREATE TABLE IF NOT EXISTS prompts (
     status VARCHAR(255) DEFAULT 'private'
 );
 
+DO $$ 
+BEGIN 
+IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'brain_type_enum') THEN
+  -- Create the ENUM type 'brain_type' if it doesn't exist
+  CREATE TYPE brain_type_enum AS ENUM ('doc', 'api');
+END IF;
+END $$;
+
 --- Create brains table
 CREATE TABLE IF NOT EXISTS brains (
   brain_id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -137,7 +145,8 @@ CREATE TABLE IF NOT EXISTS brains (
   temperature FLOAT,
   openai_api_key TEXT,
   prompt_id UUID REFERENCES prompts(id),
-  last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  brain_type brain_type_enum DEFAULT 'doc'
 );
 
 
@@ -201,6 +210,15 @@ CREATE TABLE IF NOT EXISTS user_identity (
   openai_api_key VARCHAR(255)
 );
 
+-- Create the new table with 6 columns
+CREATE TABLE IF NOT EXISTS api_brain_definition (
+    brain_id UUID REFERENCES brains(brain_id),
+    method VARCHAR(255) CHECK (method IN ('GET', 'POST', 'PUT', 'DELETE')),
+    url VARCHAR(255),
+    params JSON,
+    search_params JSON,
+    secrets JSON
+);
 
 CREATE OR REPLACE FUNCTION public.get_user_email_by_user_id(user_id uuid)
 RETURNS TABLE (email text)
@@ -210,7 +228,6 @@ BEGIN
   RETURN QUERY SELECT au.email::text FROM auth.users au WHERE au.id = user_id;
 END;
 $$ LANGUAGE plpgsql;
-
 
 CREATE OR REPLACE FUNCTION public.get_user_id_by_user_email(user_email text)
 RETURNS TABLE (user_id uuid)
@@ -230,10 +247,10 @@ CREATE TABLE IF NOT EXISTS migrations (
 
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id UUID PRIMARY KEY,
-  models JSONB DEFAULT '["gpt-3.5-turbo","huggingface/mistralai/Mistral-7B-Instruct-v0.1"]'::jsonb,
-  daily_chat_credit INT DEFAULT 20,
-  max_brains INT DEFAULT 3,
-  max_brain_size INT DEFAULT 10000000
+  models JSONB DEFAULT '["gpt-3.5-turbo","gpt-4"]'::jsonb,
+  daily_chat_credit INT DEFAULT 300,
+  max_brains INT DEFAULT 30,
+  max_brain_size INT DEFAULT 100000000
 );
 
 -- knowledge table
@@ -380,10 +397,54 @@ CREATE POLICY "Access Quivr Storage 1jccrwz_2" ON storage.objects FOR UPDATE TO 
 
 CREATE POLICY "Access Quivr Storage 1jccrwz_3" ON storage.objects FOR DELETE TO anon USING (bucket_id = 'quivr');
 
+-- Create functions for secrets in vault
+CREATE OR REPLACE FUNCTION insert_secret(name text, secret text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return vault.create_secret(secret, name);
+end;
+$$;
+
+
+create or replace function read_secret(secret_name text)
+returns text
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  secret text;
+begin
+  select decrypted_secret from vault.decrypted_secrets where name =
+  secret_name into secret;
+  return secret;
+end;
+$$;
+
+create or replace function delete_secret(secret_name text)
+returns text
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+ deleted_rows int;
+begin
+ delete from vault.decrypted_secrets where name = secret_name;
+ get diagnostics deleted_rows = row_count;
+ if deleted_rows = 0 then
+   return false;
+ else
+   return true;
+ end if;
+end;
+$$;
+
+
 INSERT INTO migrations (name) 
-SELECT '20231023160000_copy_auth_users_to_public_users'
+SELECT '20231116102600_add_get_user_email_by_user_id'
 WHERE NOT EXISTS (
-    SELECT 1 FROM migrations WHERE name = '20231023160000_copy_auth_users_to_public_users'
+    SELECT 1 FROM migrations WHERE name = '20231116102600_add_get_user_email_by_user_id'
 );
-
-

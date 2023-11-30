@@ -13,6 +13,7 @@ services:
       - 3000:3000
 
   backend-core:
+    image: backend-base
     env_file:
       - ./backend/.env
     build:
@@ -20,8 +21,6 @@ services:
       dockerfile: Dockerfile
     container_name: backend-core
     restart: always
-    volumes:
-      - ./backend/:/code/
     depends_on:
       - redis
       - worker
@@ -37,6 +36,7 @@ services:
       - 6379:6379
 
   worker:
+    image: backend-base
     env_file:
       - ./backend/.env
     build:
@@ -47,10 +47,9 @@ services:
     restart: always
     depends_on:
       - redis
-    volumes:
-      - ./backend/:/code/
 
   beat:
+    image: backend-base
     env_file:
       - ./backend/.env
     build:
@@ -61,10 +60,9 @@ services:
     restart: always
     depends_on:
       - redis
-    volumes:
-      - ./backend/:/code/
 
   flower:
+    image: backend-base
     env_file:
       - ./backend/.env
     build:
@@ -73,8 +71,6 @@ services:
     container_name: flower
     command: celery -A celery_worker flower -l info --port=5555
     restart: always
-    volumes:
-      - ./backend/:/code/
     depends_on:
       - redis
       - worker

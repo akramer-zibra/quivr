@@ -1,6 +1,8 @@
 import os
 
-from utils import handle_request_validation_error
+from packages.utils.handle_request_validation_error import (
+    handle_request_validation_error,
+)
 
 if __name__ == "__main__":
     # import needed here when running main.py to debug backend
@@ -17,13 +19,6 @@ from routes.chat_routes import chat_router
 from routes.misc_routes import misc_router
 
 logger = get_logger(__name__)
-
-sentry_dsn = os.getenv("SENTRY_DSN")
-if sentry_dsn:
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        traces_sample_rate=1.0,
-    )
 
 app = FastAPI()
 

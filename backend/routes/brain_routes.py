@@ -1,15 +1,18 @@
+from typing import Dict
 from uuid import UUID
 
-from auth import AuthBearer, get_current_user
 from fastapi import APIRouter, Depends, HTTPException
 from logger import get_logger
-from models import UserIdentity, UserUsage
+from middlewares.auth.auth_bearer import AuthBearer, get_current_user
+from models import UserUsage
 from models.brain_entity import PublicBrain
 from models.databases.supabase.brains import (
     BrainQuestionRequest,
     BrainUpdatableProperties,
     CreateBrainProperties,
 )
+from modules.prompt.service.prompt_service import PromptService
+from modules.user.entity.user_identity import UserIdentity
 from repository.brain import (
     create_brain,
     create_brain_user,
@@ -23,12 +26,15 @@ from repository.brain import (
     set_as_default_brain_for_user,
     update_brain_by_id,
 )
-from repository.prompt import delete_prompt_by_id, get_prompt_by_id
+from repository.brain.get_brain_for_user import get_brain_for_user
+from repository.external_api_secret.update_secret_value import update_secret_value
 from routes.authorizations.brain_authorization import has_brain_authorization
 from routes.authorizations.types import RoleEnum
 
 logger = get_logger(__name__)
 brain_router = APIRouter()
+
+prompt_service = PromptService()
 
 
 @brain_router.get("/brains/", dependencies=[Depends(AuthBearer())], tags=["Brain"])
@@ -61,7 +67,14 @@ async def retrieve_default_brain(
 
 @brain_router.get(
     "/brains/{brain_id}/",
-    dependencies=[Depends(AuthBearer()), Depends(has_brain_authorization())],
+    dependencies=[
+        Depends(AuthBearer()),
+        Depends(
+            has_brain_authorization(
+                required_roles=[RoleEnum.Owner, RoleEnum.Editor, RoleEnum.Viewer]
+            )
+        ),
+    ],
     tags=["Brain"],
 )
 async def retrieve_brain_by_id(brain_id: UUID):
@@ -81,7 +94,6 @@ async def create_new_brain(
     user_usage = UserUsage(
         id=current_user.id,
         email=current_user.email,
-        openai_api_key=current_user.openai_api_key,
     )
     user_settings = user_usage.get_user_settings()
 
@@ -91,7 +103,10 @@ async def create_new_brain(
             detail=f"Maximum number of brains reached ({user_settings.get('max_brains', 5)}).",
         )
 
-    new_brain = create_brain(brain)
+    new_brain = create_brain(
+        brain,
+        user_id=current_user.id,
+    )
     if get_user_default_brain(current_user.id):
         logger.info(f"Default brain already exists for user {current_user.id}")
         create_brain_user(
@@ -131,12 +146,73 @@ async def update_existing_brain(
     update_brain_by_id(brain_id, brain_update_data)
 
     if brain_update_data.prompt_id is None and existing_brain.prompt_id:
-        prompt = get_prompt_by_id(existing_brain.prompt_id)
+        prompt = prompt_service.get_prompt_by_id(existing_brain.prompt_id)
         if prompt and prompt.status == "private":
-            delete_prompt_by_id(existing_brain.prompt_id)
+            prompt_service.delete_prompt_by_id(existing_brain.prompt_id)
 
     if brain_update_data.status == "private" and existing_brain.status == "public":
         delete_brain_users(brain_id)
+
+    return {"message": f"Brain {brain_id} has been updated."}
+
+
+@brain_router.put(
+    "/brains/{brain_id}/secrets-values",
+    dependencies=[
+        Depends(AuthBearer()),
+    ],
+    tags=["Brain"],
+)
+async def update_existing_brain_secrets(
+    brain_id: UUID,
+    secrets: Dict[str, str],
+    current_user: UserIdentity = Depends(get_current_user),
+):
+    """Update an existing brain's secrets."""
+
+    existing_brain = get_brain_details(brain_id)
+
+    if existing_brain is None:
+        raise HTTPException(status_code=404, detail="Brain not found")
+
+    if (
+        existing_brain.brain_definition is None
+        or existing_brain.brain_definition.secrets is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="This brain does not support secrets.",
+        )
+
+    is_brain_user = (
+        get_brain_for_user(
+            user_id=current_user.id,
+            brain_id=brain_id,
+        )
+        is not None
+    )
+
+    if not is_brain_user:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to update this brain.",
+        )
+
+    secrets_names = [secret.name for secret in existing_brain.brain_definition.secrets]
+
+    for key, value in secrets.items():
+        if key not in secrets_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Secret {key} is not a valid secret.",
+            )
+        if value:
+            update_secret_value(
+                user_id=current_user.id,
+                brain_id=brain_id,
+                secret_name=key,
+                secret_value=value,
+            )
 
     return {"message": f"Brain {brain_id} has been updated."}
 

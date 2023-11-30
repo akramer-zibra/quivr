@@ -2,22 +2,34 @@ from typing import Optional
 from uuid import UUID
 
 from logger import get_logger
-from models.brain_entity import BrainEntity, MinimalBrainEntity, PublicBrain
+from models.ApiBrainDefinition import ApiBrainDefinition
+from models.brain_entity import (
+    BrainEntity,
+    BrainType,
+    BrainUser,
+    MinimalBrainEntity,
+    PublicBrain,
+)
 from models.databases.repository import Repository
-from pydantic import BaseModel
+from models.databases.supabase.api_brain_definition import (
+    CreateApiBrainDefinition,
+)
+from pydantic import BaseModel, Extra
 
 logger = get_logger(__name__)
 
 
-class CreateBrainProperties(BaseModel):
+class CreateBrainProperties(BaseModel, extra=Extra.forbid):
     name: Optional[str] = "Default brain"
     description: Optional[str] = "This is a description"
     status: Optional[str] = "private"
     model: Optional[str]
     temperature: Optional[float] = 0.0
     max_tokens: Optional[int] = 256
-    openai_api_key: Optional[str] = None
     prompt_id: Optional[UUID] = None
+    brain_type: Optional[BrainType] = BrainType.DOC
+    brain_definition: Optional[CreateApiBrainDefinition]
+    brain_secrets_values: dict = {}
 
     def dict(self, *args, **kwargs):
         brain_dict = super().dict(*args, **kwargs)
@@ -32,9 +44,9 @@ class BrainUpdatableProperties(BaseModel):
     temperature: Optional[float]
     model: Optional[str]
     max_tokens: Optional[int]
-    openai_api_key: Optional[str]
     status: Optional[str]
     prompt_id: Optional[UUID]
+    brain_definition: Optional[ApiBrainDefinition]
 
     def dict(self, *args, **kwargs):
         brain_dict = super().dict(*args, **kwargs)
@@ -52,13 +64,18 @@ class Brain(Repository):
         self.db = supabase_client
 
     def create_brain(self, brain: CreateBrainProperties):
-        response = (self.db.table("brains").insert(brain.dict())).execute()
+        response = (
+            self.db.table("brains").insert(
+                brain.dict(exclude={"brain_definition", "brain_secrets_values"})
+            )
+        ).execute()
+
         return BrainEntity(**response.data[0])
 
     def get_user_brains(self, user_id) -> list[MinimalBrainEntity]:
         response = (
             self.db.from_("brains_users")
-            .select("id:brain_id, rights, brains (brain_id, name, status)")
+            .select("id:brain_id, rights, brains (brain_id, name, status, brain_type)")
             .filter("user_id", "eq", user_id)
             .execute()
         )
@@ -70,6 +87,7 @@ class Brain(Repository):
                     name=item["brains"]["name"],
                     rights=item["rights"],
                     status=item["brains"]["status"],
+                    brain_type=item["brains"]["brain_type"],
                 )
             )
             user_brains[-1].rights = item["rights"]
@@ -78,20 +96,23 @@ class Brain(Repository):
     def get_public_brains(self) -> list[PublicBrain]:
         response = (
             self.db.from_("brains")
-            .select("id:brain_id, name, description, last_update")
+            .select(
+                "id:brain_id, name, description, last_update, brain_type, brain_definition: api_brain_definition(*), number_of_subscribers:brains_users(count)"
+            )
             .filter("status", "eq", "public")
             .execute()
         )
         public_brains: list[PublicBrain] = []
+
         for item in response.data:
-            brain = PublicBrain(
-                id=item["id"],
-                name=item["name"],
-                description=item["description"],
-                last_update=item["last_update"],
-            )
-            brain.number_of_subscribers = self.get_brain_subscribers_count(brain.id)
-            public_brains.append(brain)
+            item["number_of_subscribers"] = item["number_of_subscribers"][0]["count"]
+            if not item["brain_definition"]:
+                del item["brain_definition"]
+            else:
+                item["brain_definition"] = item["brain_definition"][0]
+                item["brain_definition"]["secrets"] = []
+
+            public_brains.append(PublicBrain(**item))
         return public_brains
 
     def update_brain_last_update_time(self, brain_id: UUID) -> None:
@@ -102,7 +123,9 @@ class Brain(Repository):
     def get_brain_for_user(self, user_id, brain_id) -> MinimalBrainEntity | None:
         response = (
             self.db.from_("brains_users")
-            .select("id:brain_id, rights, brains (id: brain_id, status, name)")
+            .select(
+                "id:brain_id, rights, brains (id: brain_id, status, name, brain_type)"
+            )
             .filter("user_id", "eq", user_id)
             .filter("brain_id", "eq", brain_id)
             .execute()
@@ -116,6 +139,7 @@ class Brain(Repository):
             name=brain_data["brains"]["name"],
             rights=brain_data["rights"],
             status=brain_data["brains"]["status"],
+            brain_type=brain_data["brains"]["brain_type"],
         )
 
     def get_brain_details(self, brain_id):
@@ -254,36 +278,39 @@ class Brain(Repository):
 
     def delete_file_from_brain(self, brain_id, file_name: str):
         # First, get the vector_ids associated with the file_name
-        vector_response = (
+        file_vectors = (
             self.db.table("vectors")
             .select("id")
             .filter("metadata->>file_name", "eq", file_name)
             .execute()
         )
-        vector_ids = [item["id"] for item in vector_response.data]
 
-        # For each vector_id, delete the corresponding entry from the 'brains_vectors' table
-        for vector_id in vector_ids:
-            self.db.table("brains_vectors").delete().filter(
-                "vector_id", "eq", vector_id
-            ).filter("brain_id", "eq", brain_id).execute()
+        file_vectors_ids = [item["id"] for item in file_vectors.data]
 
-            # Check if the vector is still associated with any other brains
-            associated_brains_response = (
-                self.db.table("brains_vectors")
-                .select("brain_id")
-                .filter("vector_id", "eq", vector_id)
-                .execute()
-            )
-            associated_brains = [
-                item["brain_id"] for item in associated_brains_response.data
-            ]
+        # remove current file vectors from brain vectors
+        self.db.table("brains_vectors").delete().filter(
+            "vector_id", "in", file_vectors_ids
+        ).filter("brain_id", "eq", brain_id).execute()
 
-            # If the vector is not associated with any other brains, delete it from 'vectors' table
-            if not associated_brains:
-                self.db.table("vectors").delete().filter(
-                    "id", "eq", vector_id
-                ).execute()
+        vectors_used_by_another_brain = (
+            self.db.table("brains_vectors")
+            .select("vector_id")
+            .filter("vector_id", "in", file_vectors_ids)
+            .filter("brain_id", "neq", brain_id)
+            .execute()
+        )
+
+        vectors_used_by_another_brain_ids = [
+            item["vector_id"] for item in vectors_used_by_another_brain.data
+        ]
+
+        vectors_no_longer_used_ids = [
+            id for id in file_vectors_ids if id not in vectors_used_by_another_brain_ids
+        ]
+
+        self.db.table("vectors").delete().filter(
+            "id", "in", vectors_no_longer_used_ids
+        ).execute()
 
         return {"message": f"File {file_name} in brain {brain_id} has been deleted."}
 
@@ -326,3 +353,13 @@ class Brain(Repository):
         if len(response) == 0:
             raise ValueError(f"Brain with id {brain_id} does not exist.")
         return response[0]["count"]
+
+    def get_brain_users(self, brain_id: UUID) -> list[BrainUser]:
+        response = (
+            self.db.table("brains_users")
+            .select("id:brain_id, *")
+            .filter("brain_id", "eq", str(brain_id))
+            .execute()
+        )
+
+        return [BrainUser(**item) for item in response.data]

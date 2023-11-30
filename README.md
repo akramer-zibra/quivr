@@ -8,28 +8,20 @@
 [![GitHub Repo stars](https://img.shields.io/github/stars/stangirard/quivr?style=social)](https://github.com/stangirard/quivr)
 [![Twitter Follow](https://img.shields.io/twitter/follow/StanGirard?style=social)](https://twitter.com/_StanGirard)
 
-Quivr, your second brain, utilizes the power of GenerativeAI to store and retrieve unstructured information. Think of it as Obsidian, but turbocharged with AI capabilities.
+Quivr, your second brain, utilizes the power of GenerativeAI to be your personal assistant ! Think of it as Obsidian, but turbocharged with AI capabilities.
 
 [Roadmap here](https://brain.quivr.app/docs/roadmap)
 
 ## Key Features 🎯
 
-- **Universal Data Acceptance**: Quivr can handle almost any type of data you throw at it. Text, images, code snippets, we've got you covered.
-- **Generative AI**: Quivr employs advanced AI to assist you in generating and retrieving information.
 - **Fast and Efficient**: Designed with speed and efficiency at its core. Quivr ensures rapid access to your data.
 - **Secure**: Your data, your control. Always.
 - **OS Compatible**: Ubuntu 22 or newer.
-- **File Compatibility**:
-  - Text
-  - Markdown
-  - PDF
-  - Powerpoint
-  - Excel (Not Yet)
-  - CSV
-  - Word
-  - Audio
-  - Video
+- **File Compatibility**: Text, Markdown, PDF, Powerpoint, Excel, CSV, Word, Audio, Video
 - **Open Source**: Freedom is beautiful, and so is Quivr. Open source and free to use.
+- **Public/Private**: Share your brains with your users via a public link, or keep them private. 
+- **Marketplace**: Share your brains with the world, or use other people's brains to boost your productivity.
+- **Offline Mode**: Quivr works offline, so you can access your data anytime, anywhere.
 
 ## Demo Highlights 🎥
 
@@ -41,6 +33,8 @@ https://github.com/StanGirard/quivr/assets/19614572/a6463b73-76c7-4bc0-978d-7056
 Follow these instructions to get a copy of the project up and running on your local machine for development and testing purposes.
 
 You can find everything on the [documentation](https://brain.quivr.app/).
+
+Quivr can be installed offline, in order to do so, follow the instructions [here](https://brain.quivr.app/docs/Developers/selfHosted/run_fully_local). It requires some technical expertise. If you need help, feel free to join our [Discord](https://discord.gg/HUpRgp2HG8) and ask for help.
 
 ### Prerequisites 📋
 
